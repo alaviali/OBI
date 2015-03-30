@@ -5,7 +5,7 @@
 // JST Pin 3 (Red wire) = > Arduino 5VDC
 // JST Pin 4 (Yellow wire) = > Arduino Digital Pin 8
 
-//toggle variables to monitor timer interrupt status using oscilliscope
+//toggle variables to monitor timer interrupt status using oscilloscope
 boolean toggle1 = 0;
 
 int pin = 8;
@@ -48,7 +48,7 @@ void setup(){
 }//end setup
 
 ISR(TIMER1_COMPA_vect){//timer1 interrupt 1Hz toggles pin 13 (LED)
-	//generates pulse wave of the same fequency as the interrupt, monitor using oscilliscope
+	//generates pulse wave of the same fequency as the interrupt, monitor using oscilloscope
 	if (toggle1){
 		digitalWrite(13, HIGH);
 		toggle1 = 0;

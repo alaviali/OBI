@@ -16,17 +16,12 @@ unsigned long lowpulseoccupancy = 0;
 float ratio = 0;
 float concentration = 0;
 
-// mode variable, if 0 then enable interrupt, if 1 disable all interrupts
-boolean mode = 0; 
-
 void setup(){
 
 	//set pins as outputs
 	Serial.begin(9600);
-	pinMode(7, INPUT);
 	pinMode(8, INPUT);
 	pinMode(13, OUTPUT);
-	starttime = millis();//get the current time;
 
 	cli();//stop interrupts
 	
@@ -56,7 +51,7 @@ ISR(TIMER1_COMPA_vect){//timer1 interrupt 1Hz toggles pin 13 (LED)
 	else{
 		digitalWrite(13, LOW);
 		toggle1 = 1;
-	} // THIS PART NEEDS TO BE COMMENTED OUT IN FINAL CODE!
+	} // THIS PART NEEDS TO BE DELETED IN FINAL CODE!
 
 	ratio = lowpulseoccupancy / (sampletime_ms*10.0);  // Integer percentage 0=>100
 	concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62; // using spec sheet curve
@@ -68,25 +63,5 @@ ISR(TIMER1_COMPA_vect){//timer1 interrupt 1Hz toggles pin 13 (LED)
 
 void loop(){
 	duration = pulseIn(pin, LOW);
-	lowpulseoccupancy = lowpulseoccupancy + duration;
-
-	mode = digitalRead(7);
-
-	if (mode == 1) // when mode is 1, rider on, do polling, disable all interrupts
-	{
-		TIMSK1 = 0; // disable timer1 interrupt
-		if ((millis() - starttime) > sampletime_ms)//if the sampel time == 1s
-		{
-			ratio = lowpulseoccupancy / (sampletime_ms*10.0);  // Integer percentage 0=>100
-			concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62; // using spec sheet curve
-			Serial.print("Concentration: ");
-			Serial.println(concentration);
-			lowpulseoccupancy = 0;
-			starttime = millis();
-		}
-	}
-	else // when mode is 0, rider off, enable all interrupts
-	{
-		TIMSK1 |= (1 << OCIE1A);
-	}
+	lowpulseoccupancy = lowpulseoccupancy + duration; 
 }

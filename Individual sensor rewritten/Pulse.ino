@@ -21,25 +21,42 @@ volatile boolean QS = false;        // becomes true when Arduoino finds a beat.
 //toggle variables to monitor timer interrupt status using oscilloscope
 boolean toggle1 = 0;
 
+unsigned long starttime;
+unsigned long sampletime_ms = 1000;//sample 1s ;
+
 
 void setup()
 {
 	Serial.begin(9600);
+
+	starttime = millis();//get the current time;
 	
 	cli();
 
+	TCCR1A = 0;// set entire TCCR1A register to 0
+	TCCR1B = 0;// same for TCCR1B
+	TCNT1 = 0;//initialize counter value to 0
+	// set compare match register for 1hz increments
+	OCR1A = 30;// must be <65536, see worklog for calculation
+	// turn on CTC mode
+	TCCR1B |= (1 << WGM12);
+	// Set CS12 and CS10 bits for 1024 prescaler
+	TCCR1B |= (1 << CS12) | (1 << CS10);
+	// enable timer compare interrupt
+	TIMSK1 |= (1 << OCIE1A);
+
 	// Initializes Timer2 to throw an interrupt every 2mS.
-	TCCR2A = 0x02;     // DISABLE PWM ON DIGITAL PINS 3 AND 11, AND GO INTO CTC MODE
-	TCCR2B = 0x06;     // DON'T FORCE COMPARE, 256 PRESCALER 
-	OCR2A = 0X7C;      // SET THE TOP OF THE COUNT TO 124 FOR 500Hz SAMPLE RATE
-	TIMSK2 = 0x02;     // ENABLE INTERRUPT ON MATCH BETWEEN TIMER2 AND OCR2A
+	//TCCR2A = 0x02;     // DISABLE PWM ON DIGITAL PINS 3 AND 11, AND GO INTO CTC MODE
+	//TCCR2B = 0x06;     // DON'T FORCE COMPARE, 256 PRESCALER 
+	//OCR2A = 0X7C;      // SET THE TOP OF THE COUNT TO 124 FOR 500Hz SAMPLE RATE
+	//TIMSK2 = 0x02;     // ENABLE INTERRUPT ON MATCH BETWEEN TIMER2 AND OCR2A
 
 	sei();             // MAKE SURE GLOBAL INTERRUPTS ARE ENABLED      
 }
 
 // THIS IS THE TIMER 2 INTERRUPT SERVICE ROUTINE. 
 // Timer 2 makes sure that we take a reading every 2 miliseconds
-ISR(TIMER2_COMPA_vect)		// triggered when Timer2 counts to 124
+ISR(TIMER1_COMPA_vect)		// triggered when Timer2 counts to 124
 {   
 	//generates pulse wave of the same fequency as the interrupt, monitor using oscilloscope
 	if (toggle1){
@@ -52,7 +69,7 @@ ISR(TIMER2_COMPA_vect)		// triggered when Timer2 counts to 124
 	} // THIS PART NEEDS TO BE DELETED IN FINAL CODE!
 
 
-	cli();                                      // disable interrupts while we do this
+	//cli();                                      // disable interrupts while we do this
 	Signal = analogRead(pulsePin);              // read the Pulse Sensor 
 	sampleCounter += 2;                         // keep track of the time in mS with this variable
 	int N = sampleCounter - lastBeatTime;       // monitor the time since the last beat to avoid noise
@@ -125,13 +142,19 @@ ISR(TIMER2_COMPA_vect)		// triggered when Timer2 counts to 124
 		secondBeat = false;                    // when we get the heartbeat back
 	}
 
-	sei();                                   // enable interrupts when youre done!
+	//sei();                                   // enable interrupts when youre done!
 }// end isr
 
 void loop()
 {
-	Serial.print("BPM: ");
-	Serial.println(BPM);
+	if ((millis() - starttime) > sampletime_ms)//if the sampel time == 1s
+	{
+		Serial.print("BPM: ");
+		Serial.println(BPM);
+		starttime = millis();
+
+	}
+	
 
 	delay(20);                             //  take a break
 }

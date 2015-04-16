@@ -66,7 +66,7 @@ void setup()
 	TCCR1A = 0;// set entire TCCR1A register to 0
 	TCCR1B = 0;// same for TCCR1B
 	TCNT1 = 0;//initialize counter value to 0
-	// set compare match register for 1hz increments
+	// set compare match register for 4 seconds increments
 	OCR1A = 62499;// must be <65536, see worklog for calculation
 	// turn on CTC mode
 	TCCR1B |= (1 << WGM12);
@@ -96,11 +96,11 @@ ISR(TIMER1_COMPA_vect)
 	digitalWrite(LED_POWER, LOW); // power on the LED
 	delay(delayTime);
 	dustVal = analogRead(DUST_PIN); // read the dust value via pin 5 on the sensor
-	delay(delayTime2);
+	// delay(delayTime2); // commented out for now
 	digitalWrite(LED_POWER, HIGH); // turn the LED off
-	delay(offTime);
+	//delay(offTime); //  commented out for now
 
-	delay(200);
+	// delay(200);  // interval between readings, not needed in merged code
 	Serial.print("Dust value: ");
 	Serial.println(dustVal);
 
@@ -128,7 +128,7 @@ ISR(TIMER1_COMPA_vect)
 	}
 
 	readGasLevel();
-	delay(GAS_LEVEL_READING_PERIOD_MILLIS);
+	// delay(GAS_LEVEL_READING_PERIOD_MILLIS); // interval between readings no longer needed
 
 	// **************** FOR TEMP & HUMIDITY SENSOR ****************
 
@@ -174,7 +174,7 @@ void loop()
 
 	// **************** FOR TEMP & HUMIDITY SENSOR ****************
 	// Wait a few seconds between measurements.
-	delay(500);
+	// delay(500); // interval between readings no longer needed  
 }
 
 

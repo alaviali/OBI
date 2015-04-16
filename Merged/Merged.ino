@@ -1,3 +1,12 @@
+//	PINS		ARDUINO		ATMEGA
+//	GROVE		D3			5
+//	SHARP		AI3			26
+//	SHARP_LED	D4			6
+//	MQ7			AI0			23
+//	MQ7_VOLTAGE	D2			4
+//	TEMP		AI1			24
+//	PULSE		AI2			25
+
 
 //toggle variables to monitor timer interrupt status using oscilloscope
 boolean toggle1 = 0;

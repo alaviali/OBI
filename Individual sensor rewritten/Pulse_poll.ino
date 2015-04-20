@@ -10,7 +10,7 @@ volatile int amp = 100;                   // used to hold amplitude of pulse wav
 volatile boolean firstBeat = true;        // used to seed rate array so we startup with reasonable BPM
 volatile boolean secondBeat = false;      // used to seed rate array so we startup with reasonable BPM
 
-// these variables are volatile because they are used during the interrupt service routine!
+// Variables used in data processing
 volatile int BPM;                   // used to hold the pulse rate
 volatile int Signal;                // holds the incoming raw data
 volatile int IBI = 600;             // holds the time between beats, must be seeded! 
@@ -26,8 +26,8 @@ void setup()
 {
 	Serial.begin(9600);
 
-	starttime_report = millis(); // reset report timestamp to current time
-	starttime_sample = millis(); // reset sample timestamp to current time
+	starttime_report = millis(); // reset report time stamp to current time
+	starttime_sample = millis(); // reset sample time stamp to current time
 }
 
 

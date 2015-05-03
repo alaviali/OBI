@@ -24,7 +24,7 @@ float concentration = 0;
 #define DUST_PIN 3 // Analog PIN 3 ATMEGA 26
 int dustVal = 0;
 
-#define LED_POWER 2 // Digital PIN 4 ATMEGA 6
+#define LED_POWER 4 // Digital PIN 4 ATMEGA 6
 int delayTime = 280;
 int delayTime2 = 40;
 float offTime = 480;

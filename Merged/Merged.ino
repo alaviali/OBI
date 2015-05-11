@@ -1,15 +1,75 @@
-//	PINS		ARDUINO		ATMEGA
-//	GROVE		D3			5
-//	SHARP		AI3			26
-//	SHARP_LED	D4			6
-//	MQ7			AI0			23
-//	MQ7_VOLTAGE	D2			4
-//	TEMP		AI1			24
-//	PULSE		AI2			25
+//  Sensor PINOUTS
+//  PINS		ARDUINO		ATMEGA
+//  GROVE		D3			5
+//  SHARP		AI3			26
+//  SHARP_LED	D4			6
+//  MQ7			AI0			23
+//  MQ7_VOLTAGE	D2			4
+//  TEMP		AI1			24
+//  PULSE		AI2			25
+
+// Memory PINOUTS
+// 1-4 GND
+// 2 MISO ATMEGA PIN 18
+//   Arduino Digital PIN 12
+// 3 NC
+// 5 MOSI ATMEGA PIN 17
+//   Arduino Digital PIN 11
+// 6 SCK ATMEGA PIN 19
+//   Arduino Digital PIN 13
+// 7 V_BAT CR2032 
+// 8 5V Power
+// Wire Routing
+// Arduino-- 23LC1024
+// D13 <------> SCK
+// D12 <------> MISO
+// D11 <------> MOSI
+// D10 <------> CS
+// 5V  <------> VCC
+// 5V  <------> HOLD
+// 5V  <-10KR-> CS  //  pullup resistor not needed
+// GND <------> VSS
+
+#include <SPI.h>
+
+//SRAM opcodes
+#define RDSR        5 // not used
+#define WRSR        1 // not used
+#define READ        3
+#define WRITE       2
+
+// Counters for memory module
+uint32_t memory_head = 0;
+uint32_t memory_tail = 0;
+
+// **************** FOR MEMORY ******************
+// Byte transfer functions
+uint8_t Spi23LC1024Read8(uint32_t address) {
+	uint8_t read_byte;
+
+	PORTB &= ~(1 << PORTB2);        //set SPI_SS low
+	SPI.transfer(READ);
+	SPI.transfer((uint8_t)(address >> 16) & 0xff);
+	SPI.transfer((uint8_t)(address >> 8) & 0xff);
+	SPI.transfer((uint8_t)address);
+	read_byte = SPI.transfer(0x00);
+	PORTB |= (1 << PORTB2);         //set SPI_SS high
+	return read_byte;
+}
+
+void Spi23LC1024Write8(uint32_t address, uint8_t data_byte) {
+	PORTB &= ~(1 << PORTB2);        //set SPI_SS low
+	SPI.transfer(WRITE);
+	SPI.transfer((uint8_t)(address >> 16) & 0xff);
+	SPI.transfer((uint8_t)(address >> 8) & 0xff);
+	SPI.transfer((uint8_t)address);
+	SPI.transfer(data_byte);
+	PORTB |= (1 << PORTB2);         //set SPI_SS high
+}
 
 
 //toggle variables to monitor timer interrupt status using oscilloscope
-boolean toggle1 = 0;
+//boolean toggle1 = 0;
 
 // **************** FOR GROVE SENSOR ****************
 int pin = 3; // Digital PIN 3 ATMEGA 5
@@ -41,6 +101,8 @@ float offTime = 480;
 unsigned long startMillis;
 unsigned long switchTimeMillis;
 boolean heaterInHighPhase;
+
+unsigned int gasLevel;
 
 // **************** FOR TEMP & HUMIDITY SENSOR ****************
 
@@ -90,6 +152,7 @@ void setup()
 	startMillis = millis();
 	turnHeaterHigh();
 
+
 	// **************** FOR TEMP & HUMIDITY SENSOR ****************
 	dht.begin();
 
@@ -113,20 +176,25 @@ void setup()
 	TIMSK1 |= (1 << OCIE1A);
 
 	sei();//enable global interrupts
+
+	// **************** FOR MEMORY ****************
+	PORTB |= (1 << PORTB2); // pull CS high
+	SPI.begin();
+
 }
 
 ISR(TIMER1_COMPA_vect)
 {
-	//generates pulse wave of the same fequency as the interrupt, monitor using oscilloscope
+	/*	//generates pulse wave of the same fequency as the interrupt, monitor using oscilloscope
 	if (toggle1){
-		digitalWrite(13, HIGH);
-		toggle1 = 0;
+	digitalWrite(13, HIGH);
+	toggle1 = 0;
 	}
 	else{
-		digitalWrite(13, LOW);
-		toggle1 = 1;
+	digitalWrite(13, LOW);
+	toggle1 = 1;
 	} // THIS PART NEEDS TO BE DELETED IN FINAL CODE!
-
+	*/
 	// **************** FOR SHARP SENSOR ****************
 
 	// ledPower is any digital pin on the arduino connected to Pin 3 on the sensor
@@ -140,6 +208,8 @@ ISR(TIMER1_COMPA_vect)
 	// delay(200);  // interval between readings, not needed in merged code
 	Serial.print("Dust value: ");
 	Serial.println(dustVal);
+
+
 
 	// **************** FOR GROVE SENSOR ****************
 
@@ -164,7 +234,7 @@ ISR(TIMER1_COMPA_vect)
 		}
 	}
 
-	readGasLevel();
+	readGasLevel(gasLevel);
 	// delay(GAS_LEVEL_READING_PERIOD_MILLIS); // interval between readings no longer needed
 
 	// **************** FOR TEMP & HUMIDITY SENSOR ****************
@@ -195,6 +265,48 @@ ISR(TIMER1_COMPA_vect)
 	Serial.print(" *C ");
 	Serial.print(f);
 	Serial.println(" *F\t");
+
+	// **************** FOR MEMORY ****************
+
+	// split and store sharp sensor value
+	uint8_t dustVal_upper8 = (uint8_t)(dustVal >> 8);
+	uint8_t dustVal_lower8 = (uint8_t)(dustVal);
+	Spi23LC1024Write8(memory_head, dustVal_upper8);
+	++memory_head;
+	Spi23LC1024Write8(memory_head, dustVal_lower8);
+	++memory_head;
+
+	// split and store grove sensor value
+	uint16_t concentration_16 = (uint16_t)concentration;
+	uint8_t concentration_upper8 = (uint8_t)(concentration_16 >> 8);
+	uint8_t concentration_lower8 = (uint8_t)(concentration_16);
+	Spi23LC1024Write8(memory_head, concentration_upper8);
+	++memory_head;
+	Spi23LC1024Write8(memory_head, concentration_lower8);
+	++memory_head;
+
+	// split and store MQ7 CO sensor value
+	uint16_t gasLevel_16 = (uint16_t)gasLevel;
+	uint8_t gasLevel_upper8 = (uint8_t)(gasLevel_16 >> 8);
+	uint8_t gasLevel_lower8 = (uint8_t)(gasLevel_16);
+	Spi23LC1024Write8(memory_head, gasLevel_upper8);
+	++memory_head;
+	Spi23LC1024Write8(memory_head, gasLevel_lower8);
+	++memory_head;
+
+	// split and store the DHT22 sensor value
+	uint8_t humidity_8 = (uint8_t)h;
+	uint8_t fahrenheit_8 = (uint8_t)f;
+	Spi23LC1024Write8(memory_head, humidity_8);
+	++memory_head;
+	Spi23LC1024Write8(memory_head, fahrenheit_8);
+	++memory_head;
+
+	// split and store the pulse sensor value
+	uint8_t BPM_8 = (uint8_t)BPM;
+	Spi23LC1024Write8(memory_head, BPM_8);
+	++memory_head;
+
 }
 
 void loop()
@@ -299,6 +411,9 @@ void loop()
 			secondBeat = false;                    // when we get the heartbeat back
 		}
 	}
+
+	// **************** FOR MEMORY ****************
+
 }
 
 
@@ -317,22 +432,22 @@ void turnHeaterLow(){
 	switchTimeMillis = millis() + MQ7_HEATER_1_4_V_TIME_MILLIS;
 }
 
-void readGasLevel(){
-	unsigned int gasLevel = analogRead(MQ7_ANALOG_IN_PIN);
+void readGasLevel(unsigned int &gasLevel_temp){
+	gasLevel_temp = analogRead(MQ7_ANALOG_IN_PIN);
 	unsigned int time = (millis() - startMillis) / 1000;
 
 	if (heaterInHighPhase)
 	{
-		Serial.print(time);
-		Serial.print(",");
-		Serial.println("-");
+		//Serial.print(time);
+		//Serial.print(",");
+		//Serial.println("-");
+		gasLevel_temp = 0xFFFF;
 	}
 	else
 	{
-		Serial.print(time);
-		Serial.print(",");
-		Serial.println(gasLevel);
+		//Serial.print(time);
+		//Serial.print(",");
+		//Serial.println(gasLevel_temp);
 	}
 
 }
-

@@ -1,3 +1,4 @@
+
 //  Sensor PINOUTS
 //  PINS		ARDUINO		ATMEGA
 //  GROVE		D3			5
@@ -31,6 +32,7 @@
 // GND <------> VSS
 
 #include <SPI.h>
+#include <Wire.h>
 
 //SRAM opcodes
 #define RDSR        5 // not used
@@ -106,7 +108,7 @@ unsigned int gasLevel;
 
 // **************** FOR TEMP & HUMIDITY SENSOR ****************
 
-#include "DHT.h"
+#include <DHT.h>
 #define DHTPIN A1     // Analong PIN 1 ATMEGA 24
 #define DHTTYPE DHT22   // DHT 22  (AM2302)
 DHT dht(DHTPIN, DHTTYPE);

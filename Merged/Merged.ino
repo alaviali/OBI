@@ -31,8 +31,12 @@
 // 5V  <-10KR-> CS  //  pullup resistor not needed
 // GND <------> VSS
 
+#define DEBUG // comment out for release!
+
 #include <SPI.h>
 #include <Wire.h>
+#include <DHT.h>
+#include <RTClib.h>
 
 //SRAM opcodes
 #define RDSR        5 // not used
@@ -44,79 +48,71 @@
 uint32_t memory_head = 0;
 uint32_t memory_tail = 0;
 
+unsigned long num_records=0;
+
 // **************** FOR MEMORY ******************
 // Byte transfer functions
+// Put these is a .cpp file?!
 uint8_t Spi23LC1024Read8(uint32_t address) {
-	uint8_t read_byte;
+  uint8_t read_byte;
 
-	PORTB &= ~(1 << PORTB2);        //set SPI_SS low
-	SPI.transfer(READ);
-	SPI.transfer((uint8_t)(address >> 16) & 0xff);
-	SPI.transfer((uint8_t)(address >> 8) & 0xff);
-	SPI.transfer((uint8_t)address);
-	read_byte = SPI.transfer(0x00);
-	PORTB |= (1 << PORTB2);         //set SPI_SS high
-	return read_byte;
+  PORTB &= ~(1 << PORTB2);        //set SPI_SS low
+  SPI.transfer(READ);
+  SPI.transfer((uint8_t)(address >> 16) & 0xff);
+  SPI.transfer((uint8_t)(address >> 8) & 0xff);
+  SPI.transfer((uint8_t)address);
+  read_byte = SPI.transfer(0x00);
+  PORTB |= (1 << PORTB2);         //set SPI_SS high
+  return read_byte;
 }
 
 void Spi23LC1024Write8(uint32_t address, uint8_t data_byte) {
-	PORTB &= ~(1 << PORTB2);        //set SPI_SS low
-	SPI.transfer(WRITE);
-	SPI.transfer((uint8_t)(address >> 16) & 0xff);
-	SPI.transfer((uint8_t)(address >> 8) & 0xff);
-	SPI.transfer((uint8_t)address);
-	SPI.transfer(data_byte);
-	PORTB |= (1 << PORTB2);         //set SPI_SS high
+  PORTB &= ~(1 << PORTB2);        //set SPI_SS low
+  SPI.transfer(WRITE);
+  SPI.transfer((uint8_t)(address >> 16) & 0xff);
+  SPI.transfer((uint8_t)(address >> 8) & 0xff);
+  SPI.transfer((uint8_t)address);
+  SPI.transfer(data_byte);
+  PORTB |= (1 << PORTB2);         //set SPI_SS high
 }
 
 
-//toggle variables to monitor timer interrupt status using oscilloscope
-//boolean toggle1 = 0;
-
 // **************** FOR GROVE SENSOR ****************
-int pin = 3; // Digital PIN 3 ATMEGA 5
-unsigned long duration;
-unsigned long starttime;
-unsigned long grovesampletime_ms = 1000;//sample 1s ;
+#define GROVE_READ_PIN 3 // Digital PIN 3 ATMEGA 5
+unsigned long grove_duration;
+unsigned long grove_sample_time = 1000;//sample 1s ;
 unsigned long lowpulseoccupancy = 0;
 float ratio = 0;
 float concentration = 0;
 
 // **************** FOR SHARP SENSOR ****************
-#define DUST_PIN 3 // Analog PIN 3 ATMEGA 26
-int dustVal = 0;
+#define SHARP_READ_PIN 3 // Analog PIN 3 ATMEGA 26
+int sharp_dust_val = 0;
 
-#define LED_POWER 4 // Digital PIN 4 ATMEGA 6
-int delayTime = 280;
-int delayTime2 = 40;
-float offTime = 480;
+#define SHARP_LED_PIN 4 // Digital PIN 4 ATMEGA 6
+#define SHARP_DELAY_TIME 280 //
 
 // **************** FOR MQ7 SENSOR ****************
-#define VOLTAGE_REGULATOR_DIGITAL_OUT_PIN 2 // Digital PIN 2 ATMEGA PIN 4
-#define MQ7_ANALOG_IN_PIN 0 // Analong PIN 0 ATMEGA PIN 23
+#define CO_PWR_SEL_PIN 2    // Digital PIN 2 ATMEGA PIN 4
+#define CO_READ_PIN 0       // Analong PIN 0 ATMEGA PIN 23
+#define CO_HEAT_TIME 60000  // 60 seconds heat time
+#define CO_READ_TIME 90000  // 90 seconds reat time
 
-#define MQ7_HEATER_5_V_TIME_MILLIS 60000
-#define MQ7_HEATER_1_4_V_TIME_MILLIS 90000
-
-#define GAS_LEVEL_READING_PERIOD_MILLIS 1000
-
-unsigned long startMillis;
-unsigned long switchTimeMillis;
+unsigned long CO_timer_start;
+unsigned long CO_switch_time;
 boolean heaterInHighPhase;
-
 unsigned int gasLevel;
 
 // **************** FOR TEMP & HUMIDITY SENSOR ****************
 
-#include <DHT.h>
-#define DHTPIN A1     // Analong PIN 1 ATMEGA 24
-#define DHTTYPE DHT22   // DHT 22  (AM2302)
-DHT dht(DHTPIN, DHTTYPE);
+#define DHT_PIN A1          // Analong PIN 1 ATMEGA 24
+#define DHTTYPE DHT22       // DHT 22  (AM2302)
+DHT dht(DHT_PIN, DHTTYPE);  // create DHT object
+
 
 // **************** FOR PULSE SENSOR ****************
-
 //  VARIABLES
-int pulsePin = 2;                 // Analog PIN 2 ATMEGA 25
+#define PULSE_PIN 2                 // Analog PIN 2 ATMEGA 25
 volatile int rate[10];                    // array to hold last ten IBI values
 volatile unsigned long sampleCounter = 0;          // used to determine pulse timing
 volatile unsigned long lastBeatTime = 0;           // used to find IBI
@@ -129,327 +125,460 @@ volatile boolean secondBeat = false;      // used to seed rate array so we start
 
 // Variables used in data processing
 volatile int BPM;                   // used to hold the pulse rate
-volatile int Signal;                // holds the incoming raw data
 volatile int IBI = 600;             // holds the time between beats, must be seeded! 
 volatile boolean Pulse = false;     // true when pulse wave is high, false when it's low
 volatile boolean QS = false;        // becomes true when Arduoino finds a beat.
-unsigned long starttime_report;
-unsigned long starttime_sample;
-unsigned long reporttime_ms = 1000; // report every 1s in case we miss it because of interrupt;
-unsigned long sampletime_ms = 20; // sample every 20ms
+unsigned long pulse_last_sample;
+unsigned long pulse_sample_delay = 20; // sample every 20ms
+
+// create a RTC object
+RTC_DS1307 rtc;
+bool haveRTC=false; // if we have time info from back box
+
+// timer for sensor data collection
+unsigned long sensors_read_time_start;
+#define SENSORS_READ_TIME  2000    // ms
+
 
 void setup()
 {
-	Serial.begin(9600);
+  Serial.begin(57600);
+  // Default timeout is 1000ms but 9600 baud is 1 byte every 8.3ms
+  Serial.setTimeout(10); 
 
-	// **************** FOR SHARP SENSOR ****************
-	pinMode(LED_POWER, OUTPUT);
+  // **************** FOR RTC ****************
+  Wire.begin(); // Join I2C bus as a master
+  rtc.begin();  // Make sure clock is running
 
-	// **************** FOR GROVE SENSOR ****************
-	pinMode(8, INPUT);
-	pinMode(13, OUTPUT);
+  // **************** FOR SHARP SENSOR ****************
+  pinMode(SHARP_LED_PIN, OUTPUT);
 
-	// **************** FOR MQ7 SENSOR ****************
-	pinMode(VOLTAGE_REGULATOR_DIGITAL_OUT_PIN, OUTPUT);
-	startMillis = millis();
-	turnHeaterHigh();
+  // **************** FOR GROVE SENSOR ****************
+  pinMode(8, INPUT);
+  pinMode(13, OUTPUT);
+
+  // **************** FOR MQ7 SENSOR ****************
+  pinMode(CO_PWR_SEL_PIN, OUTPUT);
+  CO_timer_start = millis();
+  turnHeaterHigh();
+
+  // **************** FOR TEMP & HUMIDITY SENSOR ****************
+  dht.begin();
+
+  // **************** FOR PULSE SENSOR ****************
+  pulse_last_sample = millis(); // reset sample time stamp to current time
+
+  // **************** FOR MEMORY ****************
+  PORTB |= (1 << PORTB2); // pull CS high
+  SPI.begin();
+
+  // **************** FOR SENOR READING TIMER ****************
+  sensors_read_time_start = millis();
+  
+/*  
+  cli();//stop interrupts
+
+  //set timer1 interrupt at 0.25Hz
+  TCCR1A = 0;// set entire TCCR1A register to 0
+  TCCR1B = 0;// same for TCCR1B
+  TCNT1 = 0;//initialize counter value to 0
+  // set compare match register for 4 seconds increments
+  OCR1A = 62499;// must be <65536, see worklog for calculation
+  // turn on CTC mode
+  TCCR1B |= (1 << WGM12);
+  // Set CS12 and CS10 bits for 1024 prescaler
+  TCCR1B |= (1 << CS12) | (1 << CS10);
+  // enable timer compare interrupt
+  TIMSK1 |= (1 << OCIE1A); 
+  sei();//enable global interrupts
+*/
+
+} // setup
 
 
-	// **************** FOR TEMP & HUMIDITY SENSOR ****************
-	dht.begin();
-
-	// **************** FOR PULSE SENSOR ****************
-	starttime_report = millis(); // reset report time stamp to current time
-	starttime_sample = millis(); // reset sample time stamp to current time
-
-	cli();//stop interrupts
-
-	//set timer1 interrupt at 1Hz
-	TCCR1A = 0;// set entire TCCR1A register to 0
-	TCCR1B = 0;// same for TCCR1B
-	TCNT1 = 0;//initialize counter value to 0
-	// set compare match register for 4 seconds increments
-	OCR1A = 62499;// must be <65536, see worklog for calculation
-	// turn on CTC mode
-	TCCR1B |= (1 << WGM12);
-	// Set CS12 and CS10 bits for 1024 prescaler
-	TCCR1B |= (1 << CS12) | (1 << CS10);
-	// enable timer compare interrupt
-	TIMSK1 |= (1 << OCIE1A);
-
-	sei();//enable global interrupts
-
-	// **************** FOR MEMORY ****************
-	PORTB |= (1 << PORTB2); // pull CS high
-	SPI.begin();
-
-}
-
-ISR(TIMER1_COMPA_vect)
+void ReadSensors()
+//ISR(TIMER1_COMPA_vect)
 {
-	/*	//generates pulse wave of the same fequency as the interrupt, monitor using oscilloscope
-	if (toggle1){
-	digitalWrite(13, HIGH);
-	toggle1 = 0;
-	}
-	else{
-	digitalWrite(13, LOW);
-	toggle1 = 1;
-	} // THIS PART NEEDS TO BE DELETED IN FINAL CODE!
-	*/
-	// **************** FOR SHARP SENSOR ****************
+    DateTime now = rtc.now();
 
-	// ledPower is any digital pin on the arduino connected to Pin 3 on the sensor
-	digitalWrite(LED_POWER, LOW); // power on the LED
-	delay(delayTime);
-	dustVal = analogRead(DUST_PIN); // read the dust value via pin 5 on the sensor
-	// delay(delayTime2); // commented out for now
-	digitalWrite(LED_POWER, HIGH); // turn the LED off
-	//delay(offTime); //  commented out for now
+#ifdef DEBUG
+    unsigned long read_start = millis(); // how long does this function take to run?
+    Serial.print(now.month(), DEC);  Serial.print('/');
+    Serial.print(now.day(), DEC);    Serial.print('/');
+    Serial.print(now.year(), DEC);   Serial.print(' ');
+    Serial.print(now.hour(), DEC);   Serial.print(':');
+    Serial.print(now.minute(), DEC); Serial.print(':');
+    Serial.print(now.second(), DEC);
+#endif
 
-	// delay(200);  // interval between readings, not needed in merged code
-	Serial.print("Dust value: ");
-	Serial.println(dustVal);
+  // **************** FOR SHARP SENSOR ****************
 
+  // ledPower is any digital pin on the arduino connected to Pin 3 on the sensor
+  digitalWrite(SHARP_LED_PIN, LOW); // power on the LED
+  delay(SHARP_DELAY_TIME);  // 280ms
+  sharp_dust_val = analogRead(SHARP_READ_PIN); // read the dust value via pin 5 on the sensor
+  digitalWrite(SHARP_LED_PIN, HIGH); // turn the LED off
 
+#ifdef DEBUG
+  Serial.print(" Sharp value: ");
+  Serial.print(sharp_dust_val);
+#endif
 
-	// **************** FOR GROVE SENSOR ****************
+  // **************** FOR GROVE SENSOR ****************
+  ratio = lowpulseoccupancy / (grove_sample_time*10.0);  // Integer percentage 0=>100
+  concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62;
+  // using spec sheet curve
+#ifdef DEBUG
+  Serial.print(" Grove Concentration: ");
+  Serial.print(concentration);
+#endif
+  lowpulseoccupancy = 0;  // reset
 
-	ratio = lowpulseoccupancy / (grovesampletime_ms*10.0);  // Integer percentage 0=>100
-	concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62; // using spec sheet curve
-	Serial.print("Concentration: ");
-	Serial.println(concentration);
-	lowpulseoccupancy = 0;
+  // **************** FOR MQ7 SENSOR ****************
+  if (heaterInHighPhase) { // 5v phase of cycle. see if need to switch low yet
+    if (millis() > CO_switch_time) {
+      turnHeaterLow();
+    }
+  }
+  else {    // 1.4v phase of cycle. see if need to switch high yet
+    if (millis() > CO_switch_time) {
+      turnHeaterHigh();
+    }
+  }
 
-	// **************** FOR MQ7 SENSOR ****************
+  readGasLevel(gasLevel); // pass by reference
+  
+  // **************** FOR TEMP & HUMIDITY SENSOR ****************
+  // Reading can take 200 milliseconds, can only be done every 2 seconds
+  float h = dht.readHumidity();
+  float f = dht.readTemperature(true);
+  // Check if any reads failed and set to error value.
+  if (isnan(h) || isnan(f)) {
+    h=255;    f=255;
+  }
 
-	if (heaterInHighPhase){
-		// 5v phase of cycle. see if need to switch low yet
-		if (millis() > switchTimeMillis) {
-			turnHeaterLow();
-		}
-	}
-	else {
-		// 1.4v phase of cycle. see if need to switch high yet
-		if (millis() > switchTimeMillis) {
-			turnHeaterHigh();
-		}
-	}
+#ifdef DEBUG
+  Serial.print(" Humidity: "); Serial.print(h);
+  Serial.print(" Temp: ");  Serial.print(f);
+#endif
 
-	readGasLevel(gasLevel);
-	// delay(GAS_LEVEL_READING_PERIOD_MILLIS); // interval between readings no longer needed
+  // **************** PULSE SENSOR ****************
+#ifdef DEBUG
+    Serial.print(" BPM: "); Serial.println(BPM);
+    Serial.flush();
+#endif
 
-	// **************** FOR TEMP & HUMIDITY SENSOR ****************
+  // **************** STORE IN MEMORY ****************
+  
+  // date and time
+  Spi23LC1024Write8(memory_head++, (uint8_t)now.month());
+  Spi23LC1024Write8(memory_head++, (uint8_t)now.day());
+  Spi23LC1024Write8(memory_head++, (uint8_t)(now.year()-2000));
+  Spi23LC1024Write8(memory_head++, (uint8_t)now.hour());
+  Spi23LC1024Write8(memory_head++, (uint8_t)now.minute());
+  Spi23LC1024Write8(memory_head++, (uint8_t)now.second());
 
-	// Reading temperature or humidity takes about 250 milliseconds!
-	// Sensor readings may also be up to 2 seconds 'old' (its a very slow sensor)
-	float h = dht.readHumidity();
-	// Read temperature as Celsius
-	float t = dht.readTemperature();
-	// Read temperature as Fahrenheit
-	float f = dht.readTemperature(true);
+  
+  // split and store sharp sensor value
+  uint8_t sharp_dust_val_upper8 = (uint8_t)(sharp_dust_val >> 8);
+  uint8_t sharp_dust_val_lower8 = (uint8_t)(sharp_dust_val);
+  Spi23LC1024Write8(memory_head++, sharp_dust_val_upper8);
+  Spi23LC1024Write8(memory_head++, sharp_dust_val_lower8);
 
-	// Check if any reads failed and exit early (to try again).
-	if (isnan(h) || isnan(t) || isnan(f)) {
-		Serial.println("Failed to read from DHT sensor!");
-		return;
-	}
+  // split and store grove sensor value
+  uint16_t concentration_16 = (uint16_t)concentration;
+  uint8_t concentration_upper8 = (uint8_t)(concentration_16 >> 8);
+  uint8_t concentration_lower8 = (uint8_t)(concentration_16);
+  Spi23LC1024Write8(memory_head++, concentration_upper8);
+  Spi23LC1024Write8(memory_head++, concentration_lower8);
 
-	// Compute heat index
-	// Must send in temp in Fahrenheit!
-	float hi = dht.computeHeatIndex(f, h);
+  // split and store MQ7 CO sensor value
+  uint16_t gasLevel_16 = (uint16_t)gasLevel;
+  uint8_t gasLevel_upper8 = (uint8_t)(gasLevel_16 >> 8);
+  uint8_t gasLevel_lower8 = (uint8_t)(gasLevel_16);
+  Spi23LC1024Write8(memory_head++, gasLevel_upper8);
+  Spi23LC1024Write8(memory_head++, gasLevel_lower8);
 
-	Serial.print("Humidity: ");
-	Serial.print(h);
-	Serial.print(" %\t");
-	Serial.print("Temperature: ");
-	Serial.print(t);
-	Serial.print(" *C ");
-	Serial.print(f);
-	Serial.println(" *F\t");
+  // split and store the DHT22 sensor value
+  uint8_t humidity_8 = (uint8_t)h;
+  uint8_t fahrenheit_8 = (uint8_t)f;
+  Spi23LC1024Write8(memory_head++, humidity_8);
+  Spi23LC1024Write8(memory_head++, fahrenheit_8);
 
-	// **************** FOR MEMORY ****************
+  // split and store the pulse sensor value
+  uint8_t BPM_8 = (uint8_t)BPM;
+  Spi23LC1024Write8(memory_head++, BPM_8);
 
-	// split and store sharp sensor value
-	uint8_t dustVal_upper8 = (uint8_t)(dustVal >> 8);
-	uint8_t dustVal_lower8 = (uint8_t)(dustVal);
-	Spi23LC1024Write8(memory_head, dustVal_upper8);
-	++memory_head;
-	Spi23LC1024Write8(memory_head, dustVal_lower8);
-	++memory_head;
+  // Update how many records we have
+  num_records++;
 
-	// split and store grove sensor value
-	uint16_t concentration_16 = (uint16_t)concentration;
-	uint8_t concentration_upper8 = (uint8_t)(concentration_16 >> 8);
-	uint8_t concentration_lower8 = (uint8_t)(concentration_16);
-	Spi23LC1024Write8(memory_head, concentration_upper8);
-	++memory_head;
-	Spi23LC1024Write8(memory_head, concentration_lower8);
-	++memory_head;
+#ifdef DEBUG
+  Serial.print("Memory head after write: "); Serial.print(memory_head);
+  Serial.print(" Num records: "); Serial.println(num_records);
+#endif
 
-	// split and store MQ7 CO sensor value
-	uint16_t gasLevel_16 = (uint16_t)gasLevel;
-	uint8_t gasLevel_upper8 = (uint8_t)(gasLevel_16 >> 8);
-	uint8_t gasLevel_lower8 = (uint8_t)(gasLevel_16);
-	Spi23LC1024Write8(memory_head, gasLevel_upper8);
-	++memory_head;
-	Spi23LC1024Write8(memory_head, gasLevel_lower8);
-	++memory_head;
+  
+#ifdef DEBUG
+  Serial.print("Time to read sensors(ms): ");
+  Serial.println(millis() - read_start);
+#endif
 
-	// split and store the DHT22 sensor value
-	uint8_t humidity_8 = (uint8_t)h;
-	uint8_t fahrenheit_8 = (uint8_t)f;
-	Spi23LC1024Write8(memory_head, humidity_8);
-	++memory_head;
-	Spi23LC1024Write8(memory_head, fahrenheit_8);
-	++memory_head;
+} //ReadSensors // ISR
 
-	// split and store the pulse sensor value
-	uint8_t BPM_8 = (uint8_t)BPM;
-	Spi23LC1024Write8(memory_head, BPM_8);
-	++memory_head;
-
-}
 
 void loop()
 {
-	// **************** FOR SHARP SENSOR ****************
-	// nothing
+  // **************** CHECK FOR SERIAL DATA ****************
+  while( Serial.available() )
+    ProcessSerialData();
 
-	// **************** FOR GROVE SENSOR ****************
-	duration = pulseIn(pin, LOW);
-	lowpulseoccupancy = lowpulseoccupancy + duration;
+  // **************** FOR SHARP SENSOR ****************
+  // nothing
 
-	// **************** FOR MQ7 SENSOR ****************
-	// nothing
+  // **************** FOR GROVE SENSOR ****************
+  // continuous reading
+  grove_duration = pulseIn(GROVE_READ_PIN, LOW);
+  lowpulseoccupancy = lowpulseoccupancy + grove_duration;
 
-	// **************** FOR TEMP & HUMIDITY SENSOR ****************
-	// Wait a few seconds between measurements.
-	// delay(500); // interval between readings no longer needed 
+  // **************** FOR MQ7 SENSOR ****************
+  // nothing
 
-	// **************** FOR PULSE SENSOR ****************
+  // **************** FOR TEMP & HUMIDITY SENSOR ****************
+  // Be sure to wait 2 seconds between measurements.
 
-	if ((millis() - starttime_report) > reporttime_ms)//if the sampel time == 1s
-	{
-		Serial.print("BPM: ");
-		Serial.println(BPM);
-		starttime_report = millis();
+  // **************** FOR PULSE SENSOR ****************
+  // should be an interrupt
+  if ( (millis() - pulse_last_sample) > pulse_sample_delay) {
+    SamplePulse();
+    pulse_last_sample = millis();
+  }
 
-	}
+  // **************** READ SENSORS ****************
+ if( (millis() - sensors_read_time_start) > SENSORS_READ_TIME ) {
+ #ifdef DEBUG
+   Serial.print("Time since last reading: ");
+   Serial.println(millis() - sensors_read_time_start);
+ #endif
+   ReadSensors();
+   sensors_read_time_start = millis();
+ }
 
-
-	if ((millis() - starttime_sample) > sampletime_ms)
-	{
-		starttime_sample = millis();
-		Signal = analogRead(pulsePin);              // read the Pulse Sensor 
-		sampleCounter += 2;                         // keep track of the time in mS with this variable
-		int N = sampleCounter - lastBeatTime;       // monitor the time since the last beat to avoid noise
-
-		//  find the peak and trough of the pulse wave
-		if (Signal < thresh && N >(IBI / 5) * 3){       // avoid dichrotic noise by waiting 3/5 of last IBI
-			if (Signal < T){                        // T is the trough
-				T = Signal;                         // keep track of lowest point in pulse wave 
-			}
-		}
-
-		if (Signal > thresh && Signal > P){          // thresh condition helps avoid noise
-			P = Signal;                             // P is the peak
-		}                                        // keep track of highest point in pulse wave
-
-		//  NOW IT'S TIME TO LOOK FOR THE HEART BEAT
-		// signal surges up in value every time there is a pulse
-		if (N > 250){                                   // avoid high frequency noise
-			if ((Signal > thresh) && (Pulse == false) && (N > (IBI / 5) * 3)){
-				Pulse = true;                               // set the Pulse flag when we think there is a pulse
-				IBI = sampleCounter - lastBeatTime;         // measure time between beats in mS
-				lastBeatTime = sampleCounter;               // keep track of time for next pulse
-
-				if (secondBeat){                        // if this is the second beat, if secondBeat == TRUE
-					secondBeat = false;                  // clear secondBeat flag
-					for (int i = 0; i <= 9; i++){             // seed the running total to get a realisitic BPM at startup
-						rate[i] = IBI;
-					}
-				}
-
-				if (firstBeat){                         // if it's the first time we found a beat, if firstBeat == TRUE
-					firstBeat = false;                   // clear firstBeat flag
-					secondBeat = true;                   // set the second beat flag
-					sei();                               // enable interrupts again
-					return;                              // IBI value is unreliable so discard it
-				}
+} // void loop()
 
 
-				// keep a running total of the last 10 IBI values
-				word runningTotal = 0;                  // clear the runningTotal variable    
+void ProcessSerialData()
+{
+// Command bytes are
+#define SERIAL_SET_CLOCK 0xAA
+#define SERIAL_NUM_RECORD 0xBB
+#define SERIAL_REQUEST_RECORD 0XCC
+#define SERIAL_ACK  0xEE
+#define SERIAL_ERR  0XxFF
+  
+  int command = Serial.read();
+ 
+    if (command == 'A') { //replace with 0xAA
 
-				for (int i = 0; i <= 8; i++){                // shift data in the rate array
-					rate[i] = rate[i + 1];                  // and drop the oldest IBI value 
-					runningTotal += rate[i];              // add up the 9 oldest IBI values
-				}
+        if(! rtc.isrunning() ) {
+#ifdef DEBUG
+            Serial.println("RTC is not running!");
+#endif
+         }
+         byte month = Serial.parseInt();
+         byte day = Serial.parseInt();
+         byte year = Serial.parseInt();
+         byte hour = Serial.parseInt();
+         byte minute = Serial.parseInt();
+         byte second = Serial.parseInt();
+   
+#ifdef DEBUG
+       Serial.print("Setting rtc time to ");    Serial.print(month); Serial.print("/");
+       Serial.print(day); Serial.print("/");    Serial.print(year+2000); Serial.print(" ");
+       Serial.print(hour); Serial.print(":");   Serial.print(minute); Serial.print(":");
+       Serial.println(second);
+#endif
+   
+       rtc.adjust( DateTime(year+100, month, day, hour, minute, second));
+       // TODO: send ack
+    } else if (command == 'B') { // replace
+       Serial.print(num_records);
+    } else if (command == 'C') {  // request record
+      if (num_records == 0) 
+        SerialSendError();
+        else {  // uncompress the bytes
+          
+          uint8_t month = Spi23LC1024Read8(memory_tail++);
+          uint8_t day = Spi23LC1024Read8(memory_tail++);
+          uint16_t year = Spi23LC1024Read8(memory_tail++) + 2000;
+          uint8_t hour = Spi23LC1024Read8(memory_tail++);
+          uint8_t minute = Spi23LC1024Read8(memory_tail++);
+          uint8_t second = Spi23LC1024Read8(memory_tail++);
+          
+          uint16_t sharp_value = Spi23LC1024Read8(memory_tail++); // upper byte
+          sharp_value <<= 8;
+          sharp_value |= Spi23LC1024Read8(memory_tail++);
 
-				rate[9] = IBI;                          // add the latest IBI to the rate array
-				runningTotal += rate[9];                // add the latest IBI to runningTotal
-				runningTotal /= 10;                     // average the last 10 IBI values 
-				BPM = 60000 / runningTotal;               // how many beats can fit into a minute? that's BPM!
-				QS = true;                              // set Quantified Self flag 
-				// QS FLAG IS NOT CLEARED INSIDE THIS ISR
-			}
-		}
+          uint16_t grove_value = Spi23LC1024Read8(memory_tail++); // upper byte
+          grove_value <<= 8;
+          grove_value |= Spi23LC1024Read8(memory_tail++);
+          
+          uint16_t co_value = Spi23LC1024Read8(memory_tail++); // upper byte
+          co_value <<= 8;
+          co_value |= Spi23LC1024Read8(memory_tail++);
 
-		if (Signal < thresh && Pulse == true){   // when the values are going down, the beat is over
-			Pulse = false;                         // reset the Pulse flag so we can do it again
-			amp = P - T;                           // get amplitude of the pulse wave
-			thresh = amp / 2 + T;                    // set thresh at 50% of the amplitude
-			P = thresh;                            // reset these for next time
-			T = thresh;
-		}
+          uint8_t humidity = Spi23LC1024Read8(memory_tail++);
+          uint8_t temp = Spi23LC1024Read8(memory_tail++);
+          uint8_t bpm = Spi23LC1024Read8(memory_tail++);
+          
+          // send the data as text
+          Serial.print(month); Serial.print(day); Serial.print(year);
+          Serial.print(hour); Seriial.print(minute); Serial.print(second);
+          Serial.print(sharp_value); Serial.print(grove_value);
+          Serial.print(co_value); Serial.print(humidity);
+          Serial.print(temp); Serial.print(bpm);
+          Serial.flush();
+          
+          num_records--;
+          
+      } // send record
 
-		if (N > 2500){                           // if 2.5 seconds go by without a beat
-			thresh = 512;                          // set thresh default
-			P = 512;                               // set P default
-			T = 512;                               // set T default
-			lastBeatTime = sampleCounter;          // bring the lastBeatTime up to date        
-			firstBeat = true;                      // set these to avoid noise
-			secondBeat = false;                    // when we get the heartbeat back
-		}
-	}
+    } else {   // unrecognized command
+       SerialSendError();
+#ifdef DEBUG
+       Serial.print("Undefined command code: ");
+       Serial.println(command);
+#endif
+  }
+  
+} // ProcessSerialData()
 
-	// **************** FOR MEMORY ****************
 
+void SerialSendError()
+{
+  // read out any pending serial data
+  while (Serial.available())
+    Serial.read();
+  // write error code
+  Serial.write(0xEE);
+  Serial.flush();
 }
+
+
+void SamplePulse()
+{
+  pulse_last_sample = millis();
+  volatile int Signal = analogRead(PULSE_PIN); // read the Pulse Sensor raw data
+  sampleCounter += pulse_sample_delay;        // keep track of the time in mS with this variable
+  int N = sampleCounter - lastBeatTime;       // monitor the time since the last beat to avoid noise
+
+    //  find the peak and trough of the pulse wave
+  if (Signal < thresh && N >(IBI / 5) * 3){       // avoid dichrotic noise by waiting 3/5 of last IBI
+    if (Signal < T){                        // T is the trough
+      T = Signal;                         // keep track of lowest point in pulse wave 
+    }
+  }
+
+  if (Signal > thresh && Signal > P){          // thresh condition helps avoid noise
+    P = Signal;                             // P is the peak
+  }                                        // keep track of highest point in pulse wave
+
+  //  NOW IT'S TIME TO LOOK FOR THE HEART BEAT
+  // signal surges up in value every time there is a pulse
+  if (N > 250){                                   // avoid high frequency noise
+    if ((Signal > thresh) && (Pulse == false) && (N > (IBI / 5) * 3)){
+      Pulse = true;                               // set the Pulse flag when we think there is a pulse
+      IBI = sampleCounter - lastBeatTime;         // measure time between beats in mS
+      lastBeatTime = sampleCounter;               // keep track of time for next pulse
+
+      if (secondBeat){                        // if this is the second beat, if secondBeat == TRUE
+        secondBeat = false;                  // clear secondBeat flag
+        for (int i = 0; i <= 9; i++){        // seed the running total to get a realisitic BPM at startup
+          rate[i] = IBI;
+        }
+      }
+
+      if (firstBeat){                         // if it's the first time we found a beat, if firstBeat == TRUE
+        firstBeat = false;                   // clear firstBeat flag
+        secondBeat = true;                   // set the second beat flag
+        sei();                               // enable interrupts again
+        return;                              // IBI value is unreliable so discard it
+      }
+
+
+      // keep a running total of the last 10 IBI values
+      word runningTotal = 0;                  // clear the runningTotal variable    
+
+      for (int i = 0; i <= 8; i++){                // shift data in the rate array
+        rate[i] = rate[i + 1];                  // and drop the oldest IBI value 
+        runningTotal += rate[i];              // add up the 9 oldest IBI values
+      }
+
+      rate[9] = IBI;                          // add the latest IBI to the rate array
+      runningTotal += rate[9];                // add the latest IBI to runningTotal
+      runningTotal /= 10;                     // average the last 10 IBI values 
+      BPM = 60000 / runningTotal;               // how many beats can fit into a minute? that's BPM!
+      QS = true;                              // set Quantified Self flag 
+      // QS FLAG IS NOT CLEARED INSIDE THIS ISR
+    }
+  }
+
+  if (Signal < thresh && Pulse == true){   // when the values are going down, the beat is over
+    Pulse = false;                         // reset the Pulse flag so we can do it again
+    amp = P - T;                           // get amplitude of the pulse wave
+    thresh = amp / 2 + T;                    // set thresh at 50% of the amplitude
+    P = thresh;                            // reset these for next time
+    T = thresh;
+  }
+
+  if (N > 2500){                           // if 2.5 seconds go by without a beat
+    thresh = 512;                          // set thresh default
+    P = 512;                               // set P default
+    T = 512;                               // set T default
+    lastBeatTime = sampleCounter;          // bring the lastBeatTime up to date        
+    firstBeat = true;                      // set these to avoid noise
+    secondBeat = false;                    // when we get the heartbeat back
+  }
+} // SamplePulse()
 
 
 // **************** FOR MQ7 SENSOR ****************
 void turnHeaterHigh(){
-	// 5v phase
-	digitalWrite(VOLTAGE_REGULATOR_DIGITAL_OUT_PIN, LOW);
-	heaterInHighPhase = true;
-	switchTimeMillis = millis() + MQ7_HEATER_5_V_TIME_MILLIS;
+  // 5v phase
+  digitalWrite(CO_PWR_SEL_PIN, LOW);
+  heaterInHighPhase = true;
+  CO_switch_time = millis() + CO_HEAT_TIME;
 }
 
 void turnHeaterLow(){
-	// 1.4v phase
-	digitalWrite(VOLTAGE_REGULATOR_DIGITAL_OUT_PIN, HIGH);
-	heaterInHighPhase = false;
-	switchTimeMillis = millis() + MQ7_HEATER_1_4_V_TIME_MILLIS;
+  // 1.4v phase
+  digitalWrite(CO_PWR_SEL_PIN, HIGH);
+  heaterInHighPhase = false;
+  CO_switch_time = millis() + CO_READ_TIME;
 }
 
 void readGasLevel(unsigned int &gasLevel_temp){
-	gasLevel_temp = analogRead(MQ7_ANALOG_IN_PIN);
-	unsigned int time = (millis() - startMillis) / 1000;
+  gasLevel_temp = analogRead(CO_READ_PIN);
+  unsigned int time = (millis() - CO_timer_start) / 1000;
 
-	if (heaterInHighPhase)
-	{
-		//Serial.print(time);
-		//Serial.print(",");
-		//Serial.println("-");
-		gasLevel_temp = 0xFFFF;
-	}
-	else
-	{
-		//Serial.print(time);
-		//Serial.print(",");
-		//Serial.println(gasLevel_temp);
-	}
+  if (heaterInHighPhase)
+  {
+#ifdef DEBUG
+    Serial.print(" CO: ");
+    Serial.print(time);
+    Serial.print(",");
+    Serial.print("-");
+#endif
+    gasLevel_temp = 0xFFFF;
+  }
+  else
+  {
+#ifdef DEBUG
+    Serial.print(" CO: ");
+    Serial.print(time);
+    Serial.print(",");
+    Serial.print(gasLevel_temp);
+#endif
+  }
 
-}
+} // readGasLevel
+

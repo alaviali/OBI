@@ -57,6 +57,7 @@ bool haveClock=false;
 // **************** FOR SD CARD ******************
 #define CHIP_SELECT_PIN 10
 File myFile;
+String file_name;
 
 // **************** FOR GROVE SENSOR ****************
 #define GROVE_READ_PIN 3 // Digital PIN 3 ATMEGA 5
@@ -94,7 +95,7 @@ DHT dht(DHT_PIN, DHTTYPE);  // create DHT object
 // **************** RTC ****************
 RTC_DS1307 rtc;
 bool haveRTC=false; // if we have time info from gps
-
+DateTime now;
 
 // **************** timer for sensor data collection ****************
 unsigned long sensors_read_time_start;
@@ -129,23 +130,28 @@ void setup()
   dht.begin();
   
   // **************** FOR MEMORY ****************
-  //must be left as an output or the SD library functions will not work. 
+  // must be left as an output or the SD library functions will not work. 
   pinMode(SS, OUTPUT);
+  
+  DateTime saved_time=rtc.now();
+  file_name = "obi-"+ String(saved_time.month() ) + '-' + String(saved_time.day()) +
+      ".txt";
+  
   if ( !SD.begin(CHIP_SELECT_PIN) ) 
 #ifdef DEGUB
     Serial.println("SD card initialization failed!");
 #endif
-  delay(100);
+  delay(100); // otherwise open() will fail
   // write header
-  myFile = SD.open("obidata.txt", FILE_WRITE);
+  myFile = SD.open(file_name.c_str(), FILE_WRITE);
 
 
   if (myFile) {
 #ifdef DEBUG
     Serial.println("Writing header to SD");
 #endif
-    myFile.print("lat,lon DD/MM/YYYY HH:MM:SS");
-    myFile.println("\tSharp value\tGrove value\tCO value\tHumidity\tTemp");
+    myFile.print("latitude\tlongitude\tDD/MM/YYYY HH:MM:SS");
+    myFile.println("\tSharp value\tGrove value\tCO value\tHumidity\tTemp (celsius)");
     myFile.close();
   } else {
 #ifdef DEBUG
@@ -163,9 +169,10 @@ void loop()
 {
   // for gps
   bool newData = false;
+#ifdef DEBUG
   unsigned long chars;
   unsigned short sentences, failed;
-  
+#endif 
   //gps_serial.listen(); // select the GPS softserial port for listening
   
   // For one second we parse GPS data and report some key values
@@ -183,12 +190,12 @@ void loop()
       
       if(!haveClock) { // set clock
         gps.crack_datetime(&gps_year, &gps_month, &gps_day, &gps_hour, &gps_minute, &gps_second);
-         gps_hour -= 7; // adjust UTC FIXME!
-         if (gps_hour < 0) {
-           gps_day -=1;
-           gps_hour +=24;
+         char tmp = gps_hour - 7; // adjust UTC FIXME!
+         if (tmp < 0) {
+           gps_day -= 1;
+           gps_hour = tmp+24;
          }
-         // rtc wants the year to be since 1900?
+         //
          rtc.adjust( DateTime(gps_year-2000, gps_month, gps_day, gps_hour, gps_minute, gps_second));
          haveClock=true;
       }
@@ -206,11 +213,6 @@ void loop()
     Serial.println("** No characters received from GPS: check wiring **");
 #endif
  
-  
-  // **************** CHECK FOR SERIAL DATA ****************
-  // while( Serial.available() ) // dubious
-  //   ProcessSerialData();
-
   // **************** FOR SHARP SENSOR ****************
   // nothing
 
@@ -225,17 +227,17 @@ void loop()
   // **************** FOR TEMP & HUMIDITY SENSOR ****************
   // Be sure to wait 2 seconds between measurements.
 
-
   // **************** READ SENSORS ****************
-  if( (millis() - sensors_read_time_start) > SENSORS_READ_TIME ) {
 #ifdef DEBUG
     Serial.print("Time since last reading: ");
     Serial.println(millis() - sensors_read_time_start);
 #endif
+
+  if( (millis() - sensors_read_time_start) > SENSORS_READ_TIME ) {
     ReadSensors();
     sensors_read_time_start = millis();
   }
-
+    
 } // void loop()
 
 
@@ -247,7 +249,7 @@ void ReadSensors()
 #endif
 
   // **************** SENSOR READING STAMP TIME ****************
-  DateTime now = rtc.now();
+  now = rtc.now();
 
   // **************** FOR SHARP SENSOR ****************
   digitalWrite(SHARP_LED_PIN, LOW); // power on the LED
@@ -258,33 +260,34 @@ void ReadSensors()
 
   // **************** FOR GROVE SENSOR ****************
   ratio = lowpulseoccupancy / (grove_sample_time*10.0);  // Integer percentage 0=>100
-  concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62;
   // using spec sheet curve
+  concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62;
   lowpulseoccupancy = 0;  // reset
 
 
   // **************** FOR MQ7 SENSOR ****************
-  if (heaterInHighPhase) { 
-    if (millis() > CO_switch_time) {  // switch to 1.4V phase?
-      digitalWrite(CO_PWR_SEL_PIN, HIGH); // 1.4v phase
-      heaterInHighPhase = false;
-      CO_switch_time = millis() + CO_READ_TIME;
-    }
-  } else if (millis() > CO_switch_time) { // switch to 5V phase?
-      digitalWrite(CO_PWR_SEL_PIN, LOW);// 5v phase
-      heaterInHighPhase = true;
-      CO_switch_time = millis() + CO_HEAT_TIME;
+  
+    if (millis() > CO_switch_time) {  // switch to 1.4V phase
+      if (heaterInHighPhase) { 
+        digitalWrite(CO_PWR_SEL_PIN, HIGH); // 1.4v phase
+        heaterInHighPhase = false;
+        CO_switch_time = millis() + CO_READ_TIME;
+      } else { // switch to 5V phase
+        digitalWrite(CO_PWR_SEL_PIN, LOW);// 5v phase
+        heaterInHighPhase = true;
+        CO_switch_time = millis() + CO_HEAT_TIME;
+      }
   }
   // readGasLevel
   gasLevel = analogRead(CO_READ_PIN);
-  if (heaterInHighPhase)
-    gasLevel = 0xFFFF;
+ // if (heaterInHighPhase)
+ //   gasLevel = 0xFFFF;
 
   
   // **************** FOR TEMP & HUMIDITY SENSOR ****************
   // Reading can take 200 milliseconds, can only be done every 2 seconds
   float h = dht.readHumidity();
-  float f = dht.readTemperature(true);
+  float f = dht.readTemperature(false); // change to true for Farenheit
   if (isnan(h) || isnan(f)) { // Check if any reads failed and set to error value.
     h=255;    f=255;
   }
@@ -297,19 +300,22 @@ void ReadSensors()
   // **************** log data to serial output ****************
   
 #ifdef DEBUG
-    Serial.print(flat, 6); Serial.print(',');
+
+    Serial.print(now.month());  Serial.print('/');
+    Serial.print(now.day());    Serial.print('/');
+    Serial.print(now.year());   Serial.print(' ');
+    Serial.print(now.hour());   Serial.print(':');
+    Serial.print(now.minute()); Serial.print(':');
+    Serial.print(now.second()); Serial.print('\t');
+
+    Serial.print(flat, 6); Serial.print(" ,");
     Serial.print(flon, 6); Serial.print(' ');
-    Serial.print(now.month(), DEC);  Serial.print('/');
-    Serial.print(now.day(), DEC);    Serial.print('/');
-    Serial.print(now.year(), DEC);   Serial.print(' ');
-    Serial.print(now.hour(), DEC);   Serial.print(':');
-    Serial.print(now.minute(), DEC); Serial.print(':');
-    Serial.print(now.second(), DEC);
-    Serial.print(" Sharp value: ");         Serial.print(sharp_dust_val);
-    Serial.print(" Grove Concentration: "); Serial.print(concentration);
-    Serial.print(" CO: ");                  Serial.print(gasLevel);
-    Serial.print(" Humidity: ");            Serial.print(h);
-    Serial.print(" Temp: ");                Serial.println(f);
+    
+    Serial.print("\tSharp value: ");         Serial.print(sharp_dust_val);
+    Serial.print("\tGrove Concentration: "); Serial.print(concentration);
+    Serial.print("\tCO: ");                  Serial.print(gasLevel);
+    Serial.print("\tHumidity: ");            Serial.print(h);
+    Serial.print("\tTemp: ");                Serial.println(f);
     Serial.flush();
 #endif
 
@@ -318,7 +324,9 @@ void ReadSensors()
 #ifdef DEBUG
   Serial.println("Logging a record to SD"); 
 #endif
-  myFile = SD.open("obidata.txt", FILE_WRITE);
+
+  myFile = SD.open(file_name.c_str(), FILE_WRITE);
+
 #ifdef DEBUG 
   if (myFile) {
     Serial.println("File open");
@@ -329,28 +337,36 @@ void ReadSensors()
 #endif
 
   // gps
-  myFile.print(flat,6); myFile.print(',');
-  myFile.print(flon,6); myFile.print(' ');
+  myFile.print(flat,6); myFile.print('\t');
+  myFile.print(flon,6); myFile.print('\t');
+  // altitude, speed?
   
   // date and time
-  myFile.print(now.month());   myFile.print('/');
-  myFile.print(now.day());     myFile.print('/');
-  myFile.print(now.year());    myFile.print(' ');
-  myFile.print(now.hour());    myFile.print(':'); 
-  myFile.print(now.minute());  myFile.print(':');
-  myFile.print(now.second());  myFile.print('\t');
+  myFile.print(String(now.month()).length()==1 ? String('0') + String(now.month()) : now.month() );
+  myFile.print('/');
+  myFile.print(String(now.day()).length()==1 ? String('0') + String(now.day()) : now.day() );
+  myFile.print('/');
+  myFile.print(now.year());
+  myFile.print(' ');
+  myFile.print(String(now.hour()).length()==1 ? String('0') + String(now.hour()) : now.hour() );
+  myFile.print(':');
+  myFile.print(String(now.minute()).length()==1 ? String('0') + String(now.minute()) : now.minute() );
+  myFile.print(':');
+  myFile.print(String(now.second()).length()==1 ? String('0') + String(now.second()) : now.second() );
+  myFile.print('\t');
   
   // sharp sensor value
-  myFile.print(sharp_dust_val);
-  myFile.print('\t');
+  myFile.print(sharp_dust_val); myFile.print('\t');
 
   //  grove sensor value
-  myFile.print(concentration);
-  myFile.print('\t');
+  myFile.print(concentration);  myFile.print('\t');
 
   // MQ7 CO sensor value
   myFile.print(gasLevel);
+  if(heaterInHighPhase)
+    myFile.print(" (H)");
   myFile.print('\t');
+  
   
   // DHT22 sensor value
   myFile.print(h);  myFile.print('\t');
@@ -365,6 +381,4 @@ void ReadSensors()
 #endif
 
 } //ReadSensors // ISR
-
-
 

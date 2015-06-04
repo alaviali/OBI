@@ -5,13 +5,13 @@
 
 //  Sensor PINOUTS
 //  PINS		ARDUINO		ATMEGA
-//  GROVE		D3			5
-//  SHARP		AI3			26
-//  SHARP_LED	D4			6
-//  MQ7			AI0			23
-//  MQ7_VOLTAGE	D2			4
-//  TEMP		AI1			24
-//  PULSE		AI2			25
+//  GROVE		D3		5
+//  SHARP		A3		26
+//  SHARP_LED	        D4		6
+//  MQ7			A0		23
+//  MQ7_VOLTAGE	        D2		4
+//  TEMP		A1		24
+//  PULSE		A2		25
 
 // Memory PINOUTS
 // Arduino-- SD shield
@@ -43,16 +43,18 @@ bool haveClock=false;
 
 // **************** FOR SD CARD ******************
 #define CHIP_SELECT_PIN 10
-File myFile;
+File data_file;
 String file_name;
 
 // **************** FOR GROVE SENSOR ****************
 #define GROVE_READ_PIN 3 // Digital PIN 3 ATMEGA 5
 unsigned long grove_duration;
-unsigned long grove_sample_time = 1000; //sample 1s ;  FIXME- used in calulation
+unsigned long grove_start_time;
+unsigned long grove_stop_time;
 unsigned long lowpulseoccupancy = 0;
 float ratio = 0;
 float concentration = 0;
+
 
 // **************** FOR SHARP SENSOR ****************
 #define SHARP_READ_PIN 3 // Analog PIN 3 ATMEGA 26
@@ -60,7 +62,7 @@ int sharp_dust_val = 0;
 float sharp_voltage=0;
 
 #define SHARP_LED_PIN 4      // Digital PIN 4 ATMEGA 6
-#define SHARP_DELAY_TIME 280 
+
 
 // **************** FOR MQ7 SENSOR ****************
 #define CO_PWR_SEL_PIN 2    // Digital PIN 2 ATMEGA PIN 4
@@ -105,6 +107,7 @@ void setup()
   // **************** FOR GROVE SENSOR ****************
   pinMode(8, INPUT);
   pinMode(13, OUTPUT);
+  grove_start_time=millis();
 
   // **************** FOR MQ7 SENSOR ****************
   pinMode(CO_PWR_SEL_PIN, OUTPUT);
@@ -124,31 +127,20 @@ void setup()
   DateTime rtc_time=rtc.now();
   file_name = String( rtc_time.month() ) + '-' + String( rtc_time.day() ) + '-' + 
       String( rtc_time.hour() ) + ".txt";
-
-  if ( !SD.begin(CHIP_SELECT_PIN) ) { 
-#ifdef DEGUB
-    Serial.println("SD card initialization failed!");
-#endif
-  }
+#ifndef DEBUG
+  SD.begin(CHIP_SELECT_PIN);
   delay(100); // otherwise open() will fail
 
   // write header
  
-#ifdef DEBUG
-    Serial.println("Writing header to SD");
-    Serial.flush();
-#endif
-
-  myFile = SD.open(file_name.c_str(), FILE_WRITE);
-  if (myFile) {
-    myFile.print("Rec. #\tDD/MM/YYYY\tHH:MM:SS\tlatitude\tlongitude\t");
-    myFile.println("Sharp value\tGrove value\tCO read\tCO heat\tHumidity\tTemp (celsius)");
-    myFile.close();
-  } else {
-#ifdef DEBUG
-    Serial.println("Error opening SD file to write header");
-#endif
+  data_file = SD.open(file_name.c_str(), FILE_WRITE);
+  if (data_file) {
+    data_file.print("Rec. #\tMM/DD/YYYY\tHH:MM:SS (UTC)\tlatitude\tlongitude\t");
+    data_file.println("Sharp\tGrove\tCO read\tCO heat\tHumidity\tTemp (celsius)");
+    data_file.close();
   }
+
+ #endif
 
   // **************** FOR SENOR READING TIMER ****************
   sensors_read_time_start = millis();
@@ -181,11 +173,11 @@ void loop()
       if(!haveClock) { // set clock
         gps.crack_datetime(&gps_year, &gps_month, &gps_day, &gps_hour, &gps_minute, &gps_second);
          // adjust UTC FIXME!
-         if ( gps_hour < 7) {  // don't subtract from unsigned types
-           gps_day -= 1;
-           gps_hour += 17;     // instead add 24 - 7
-         } else
-            gps_hour -=7;     // OK to subtract here
+         //if ( gps_hour < 7) {  // don't subtract from unsigned types
+         //  gps_day -= 1;
+         //  gps_hour += 17;     // instead add 24 - 7
+         //} else
+         //   gps_hour -=7;     // OK to subtract here
          //  Wants years since 1900?
          rtc.adjust( DateTime(gps_year-2000, gps_month, gps_day, gps_hour, gps_minute, gps_second));
          haveClock=true;
@@ -211,8 +203,9 @@ void loop()
   // **************** FOR GROVE SENSOR ****************
   // continuous reading
   grove_duration = pulseIn(GROVE_READ_PIN, LOW);
-  lowpulseoccupancy = lowpulseoccupancy + grove_duration;
-
+  lowpulseoccupancy += grove_duration;
+  grove_stop_time=millis();  
+  
   // **************** FOR MQ7 SENSOR ****************
   // nothing
 
@@ -227,14 +220,14 @@ void loop()
 #endif
 
   if( (millis() - sensors_read_time_start) > SENSORS_READ_TIME ) {
-    ReadSensors();
+    RecordSensors();
     sensors_read_time_start = millis();
   }
     
 } // void loop()
 
 
-void ReadSensors()
+void RecordSensors()
 {
 
 #ifdef DEBUG
@@ -244,30 +237,26 @@ void ReadSensors()
   // **************** SENSOR READING STAMP TIME ****************
   now = rtc.now();
 
+
   // **************** FOR SHARP SENSOR ****************
   digitalWrite(SHARP_LED_PIN, LOW); // power on the LED
-  delay(SHARP_DELAY_TIME);  // wait 280ms
+  delayMicroseconds(280);  // wait 280us
   sharp_dust_val = analogRead(SHARP_READ_PIN); // read the dust value via pin 5 on the sensor
+  delayMicroseconds(40);  // wait 40us, may not be necessary
   digitalWrite(SHARP_LED_PIN, HIGH); // turn the LED off
   sharp_voltage = sharp_dust_val*4.9/1024;   // convert to voltage
-  sharp_voltage = (sharp_voltage - 0.0356) * 120000; // convert to particles / .01 ft^3
+  sharp_voltage = (sharp_voltage - 0.0356) * 120000; // convert to particles per .01 ft^3
   if( sharp_voltage < 0 )
     sharp_voltage = 0;
 
-  // **************** FOR GROVE SENSOR ****************
-  ratio = lowpulseoccupancy / (grove_sample_time*10.0);  // Integer percentage 0=>100
-  // using spec sheet curve, gives particles per 0.01 cubic foot
-  concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62;
-  lowpulseoccupancy = 0;  // reset
-
 
   // **************** FOR MQ7 SENSOR ****************
-    if (millis() > CO_switch_time) {         // time to switch
-      if (heaterInHighPhase) { 
-        digitalWrite(CO_PWR_SEL_PIN, HIGH);  // 1.4v phase
-        heaterInHighPhase = false;
-        CO_switch_time = millis() + CO_READ_TIME;
-      } else {                               // switch to 5V phase
+  if (millis() > CO_switch_time) {         // time to switch
+    if (heaterInHighPhase) { 
+      digitalWrite(CO_PWR_SEL_PIN, HIGH);  // 1.4v phase
+      heaterInHighPhase = false;
+      CO_switch_time = millis() + CO_READ_TIME;
+    } else {                               // switch to 5V phase
         digitalWrite(CO_PWR_SEL_PIN, LOW);   // 5v phase
         heaterInHighPhase = true;
         CO_switch_time = millis() + CO_HEAT_TIME;
@@ -278,14 +267,23 @@ void ReadSensors()
 
   
   // **************** FOR TEMP & HUMIDITY SENSOR ****************
-  // Reading can take 200 milliseconds, can only be done every 2 seconds
   float h = dht.readHumidity();
   float f = dht.readTemperature(false); // change to true for Farenheit
   if (isnan(h) || isnan(f)) { // Check if any reads failed and set to error value.
     h=255;    f=255;
   }
 
-  // ********** KEEP TRACK OF HOW MANY RECORDINGS WE'VE TAKEN *********
+
+  // **************** FOR GROVE SENSOR ****************
+    // Integer percentage 0=>100
+  ratio = lowpulseoccupancy / ((grove_stop_time - grove_start_time) * 10.0);
+    // using spec sheet curve, gives particles per 0.01 cubic foot
+  concentration = 1.1*pow(ratio, 3) - 3.8*pow(ratio, 2) + 520 * ratio + 0.62;
+  lowpulseoccupancy = 0;  // reset
+  grove_start_time=millis();
+
+
+  // ********** KEEP TRACK OF NUMBER OF RECORDS *********
   num_records++;
 
 #ifdef DEBUG
@@ -334,61 +332,56 @@ void ReadSensors()
   Serial.flush();
 #endif
 
-  myFile = SD.open(file_name.c_str(), FILE_WRITE);
-
-/* #ifdef DEBUG 
-  if (!myFile) {
-    Serial.println("Error opening SD file. Record not logged.");
-    Serail.flush();
-    return;
-  }
-#endif
-*/
+#ifndef DEBUG
+  data_file = SD.open(file_name.c_str(), FILE_WRITE);
 
   // record number
-  myFile.print(num_records); myFile.print('\t');
+  data_file.print(num_records); data_file.print('\t');
 
   // date and time
-  myFile.print(String(now.month()).length()==1 ? String('0') + String(now.month()) : now.month() );
-  myFile.print('/');
-  myFile.print(String(now.day()).length()==1 ? String('0') + String(now.day()) : now.day() );
-  myFile.print('/');
-  myFile.print(now.year());
-  myFile.print('\t');
-  myFile.print(String(now.hour()).length()==1 ? String('0') + String(now.hour()) : now.hour() );
-  myFile.print(':');
-  myFile.print(String(now.minute()).length()==1 ? String('0') + String(now.minute()) : now.minute() );
-  myFile.print(':');
-  myFile.print(String(now.second()).length()==1 ? String('0') + String(now.second()) : now.second() );
-  myFile.print('\t');
+  data_file.print(String(now.month()).length()==1 ? String('0') + String(now.month()) : now.month() );
+  data_file.print('/');
+  data_file.print(String(now.day()).length()==1 ? String('0') + String(now.day()) : now.day() );
+  data_file.print('/');
+  data_file.print(now.year());
+  data_file.print('\t');
+  data_file.print(String(now.hour()).length()==1 ? String('0') + String(now.hour()) : now.hour() );
+  data_file.print(':');
+  data_file.print(String(now.minute()).length()==1 ? String('0') + String(now.minute()) : now.minute() );
+  data_file.print(':');
+  data_file.print(String(now.second()).length()==1 ? String('0') + String(now.second()) : now.second() );
+  data_file.print('\t');
 
   // gps
-  myFile.print(flat,6); myFile.print('\t');
-  myFile.print(flon,6); myFile.print('\t');
+  data_file.print(flat,6); data_file.print('\t');
+  data_file.print(flon,6); data_file.print('\t');
   // altitude, speed?
 
   // sharp sensor value
-  myFile.print(sharp_voltage); myFile.print('\t');
+  data_file.print(sharp_voltage); data_file.print('\t');
 
   //  grove sensor value
-  myFile.print(concentration);  myFile.print('\t');
+  data_file.print(concentration);  data_file.print('\t');
 
   // MQ7 CO sensor value
    if(heaterInHighPhase) {
-    myFile.print("--\t");
-    myFile.print(gasLevel);
+    data_file.print("--\t");
+    data_file.print(gasLevel);
   } else {
-    myFile.print(gasLevel); myFile.print('\t');
-    myFile.print("--");
+    data_file.print(gasLevel); data_file.print('\t');
+    data_file.print("--");
   }
-  myFile.print('\t');
+  data_file.print('\t');
   
   
   // DHT22 sensor values
-  myFile.print(h);  myFile.print('\t');
-  myFile.print(f);  myFile.println();
-  myFile.close();
-  
+  data_file.print(h);  data_file.print('\t');
+  data_file.print(f);  data_file.println();
+  data_file.close();
+#endif  
 
-} // ReadSensors()
+  // Reset the grove sample time
+  grove_start_time=millis();
+
+} // RecordSensors()
 
